@@ -1,5 +1,29 @@
 # Plan — reconstruire la chaîne de données BRVM
 
+> ## État au 26/09/2026
+>
+> | Phase | État |
+> |---|---|
+> | 0 — Décisions | **fait** — dépôt `balletyanick/brvm-data`, **public** |
+> | 1 — Scraper, cours | **fait** — 49 actions, jusqu'à 28 ans d'historique |
+> | 2 — Indicateurs | **fait** — 32 colonnes, RSI vérifié au centième |
+> | 3 — GitHub | **fait** — workflow en place, un run manuel réussi |
+> | 4 — Rebrancher le MCP | **fait** — recette passée, 6 tests sur 6 |
+> | 5 — Maintenance | garde-fous posés ; reste le 26 octobre à surveiller |
+>
+> **Points bloquants du plan, résolus :**
+> - `BRVMC` en 404 → les indices ont **leur propre endpoint**,
+>   `indice-donnees?alias_indice=BRVM-COMPOSITE`. Composite depuis 1998,
+>   6 651 séances. Beta calculable.
+> - Nombre d'actions → relevé sur la **fiche société** de richbourse, pas
+>   déduit. La déduction donnait 8 119 714 titres pour SAFC contre 11 869 750
+>   en réalité.
+>
+> **Reste à faire, côté Ballet :** lancer le workflow une fois à la main
+> (Actions → *Mise a jour des donnees BRVM* → *Run workflow*) pour valider les
+> trois nouvelles étapes depuis le runner. La collecte des cours, elle, a déjà
+> tourné depuis GitHub sans être bloquée.
+
 Objectif : ne plus dépendre du dépôt d'un tiers. Produire nos propres CSV,
 les héberger sur notre GitHub, les rafraîchir tous les jours automatiquement,
 et rebrancher le serveur MCP dessus.
@@ -195,20 +219,35 @@ Beta = covariance(r_titre, r_indice) / variance(r_indice)
 sur les 252 dernières séances communes.
 
 **Dépendance** : il faut la série de l'indice Composite.
-→ **Point bloquant à résoudre** : `BRVMC` renvoie 404 sur l'endpoint.
-Pistes : essayer `BRVM-C`, `BRVMCOMP`, ou lire la page
-`/common/variation/indice` de richbourse pour trouver le bon identifiant.
+→ **Résolu le 26/09.** Ce n'était pas un identifiant à trouver mais un
+endpoint différent :
 
-Si on ne trouve pas : laisser `Beta_1_An` vide. Aucun outil du MCP ne filtre
-dessus, c'est un champ d'affichage.
+```
+GET /common/mouvements/indice-donnees?alias_indice=BRVM-COMPOSITE&complet=1
+    Referer: /common/mouvements/indice/BRVM-COMPOSITE
+```
+
+L'alias est le nom long, pas le ticker court. Réponse `{ "cours": [[ts, v]] }`.
+6 651 séances depuis le 16/09/1998. Les 18 indices sont collectés, la table de
+correspondance ticker → alias est dans `scraper/indices.json`.
+
+`Beta_1_An` est laissé **vide** quand le titre ne cote plus : un Beta « 1 an »
+calculé sur 2019 pour un titre radié serait un chiffre faux présenté comme
+frais.
 
 ### 2.4 Nombre d'actions
 
 Table statique de 49 nombres, dans `actions.json`, nécessaire pour
 `Valorisation` et `Capital_Echange`.
 
-Sources : rapports annuels, fiches sociétés brvm.org, ou déduction
-`capitalisation ÷ cours` relevée une fois sur Sikafinance ou brvm.org.
+→ **Résolu le 26/09.** Relevé sur
+`richbourse.com/common/apprendre/details-societe/{TICKER}`, champ
+« Nombre de titres », par `scraper/faire_actions.py`. Relancé chaque jour par
+le workflow, ce qui rattrapera le fractionnement Sonatel tout seul.
+
+La déduction `capitalisation ÷ cours` a été essayée d'abord : elle donnait
+8 119 714 titres pour SAFC contre **11 869 750** en réalité — une augmentation
+de capital que les anciennes capitalisations ignoraient.
 
 **À mettre à jour en cas d'augmentation de capital ou de fractionnement.**
 → **Sonatel passe de 100 millions à 1 milliard d'actions le 26 octobre 2026.**
