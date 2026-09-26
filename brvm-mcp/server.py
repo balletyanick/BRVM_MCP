@@ -262,60 +262,13 @@ async def get_market_overview() -> dict:
     }
 
 
-def _build_http_app_with_auth():
-    """Construit l'app HTTP/SSE de FastMCP avec un middleware d'authentification par API key.
-
-    La clé attendue est lue dans la variable d'environnement BRVM_MCP_API_KEY.
-    Si la variable est absente, l'authentification est désactivée (utile en dev).
-    Le client doit envoyer la clé soit dans le header `X-API-Key`, soit dans le
-    paramètre de requête `api_key`.
-    """
-    import os
-    from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.responses import JSONResponse
-
-    api_key = os.environ.get("BRVM_MCP_API_KEY")
-
-    class APIKeyMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request, call_next):
-            if api_key:
-                provided = (
-                    request.headers.get("x-api-key")
-                    or request.query_params.get("api_key")
-                )
-                if provided != api_key:
-                    return JSONResponse(
-                        {"error": "Invalid or missing API key"},
-                        status_code=401,
-                    )
-            return await call_next(request)
-
-    transport_kind = os.environ.get("MCP_TRANSPORT", "streamable-http")
-    if transport_kind == "sse":
-        app = mcp.sse_app()
-    else:
-        app = mcp.streamable_http_app()
-    app.add_middleware(APIKeyMiddleware)
-    return app
-
-
 def main():
-    """Point d'entrée principal.
+    """Point d'entree : serveur MCP local, transport stdio.
 
-    - MCP_TRANSPORT absent ou "stdio" → mode local (Claude Desktop, Cursor local)
-    - MCP_TRANSPORT="streamable-http" ou "sse" → mode HTTP distant (Smithery, Render, etc.)
+    Lance par Claude Code via ~/.claude.json :
+        python c:/Users/Yanick/Desktop/BRVM/brvm-mcp/server.py
     """
-    import os
-
-    transport = os.environ.get("MCP_TRANSPORT", "stdio")
-
-    if transport == "stdio":
-        mcp.run()
-    else:
-        import uvicorn
-        app = _build_http_app_with_auth()
-        port = int(os.environ.get("PORT", "8000"))
-        uvicorn.run(app, host="0.0.0.0", port=port)
+    mcp.run()
 
 
 if __name__ == "__main__":
