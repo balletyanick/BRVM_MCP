@@ -8,15 +8,20 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("BRVM")
 
-BASE_URL = "https://raw.githubusercontent.com/Fredysessie/brvm-data-public/main/data"
+# Source des donnees. Le depot Fredysessie/brvm-data-public a ete supprime en
+# septembre 2026 : les CSV sont desormais produits et heberges par nous.
+# Generateur : https://github.com/balletyanick/brvm-data (scraper/collecte.py)
+BASE_URL = "https://raw.githubusercontent.com/balletyanick/brvm-data/main/data"
 
 STOCK_TICKERS = [
-    "ABJC", "BICB", "BICC", "BNBC", "BOAB", "BOABF", "BOAC", "BOAM", "BOAN", "BOAS",
-    "CABC", "CBIBF", "CFAC", "CIEC", "ECOC", "ETIT", "FTSC", "LNBB", "NEIC", "NSBC",
-    "NTLC", "ONTBF", "ORAC", "ORGT", "PALC", "PRSC", "SAFC", "SCRC", "SDCC", "SDSC",
-    "SEMC", "SGBC", "SHEC", "SIBC", "SICC", "SIVC", "SLBC", "SMBC", "SNTS", "SOGC",
-    "SPHC", "STAC", "STBC", "SVOC", "TTLC", "TTLS", "UNLC", "UNXC",
+    "ABJC", "BBGC", "BICB", "BICC", "BNBC", "BOAB", "BOABF", "BOAC", "BOAM", "BOAN",
+    "BOAS", "CABC", "CBIBF", "CFAC", "CIEC", "ECOC", "ETIT", "FTSC", "LNBB", "NEIC",
+    "NSBC", "NTLC", "ONTBF", "ORAC", "ORGT", "PALC", "PRSC", "SAFC", "SCRC", "SDCC",
+    "SDSC", "SEMC", "SGBC", "SHEC", "SIBC", "SICC", "SIVC", "SLBC", "SMBC", "SNTS",
+    "SOGC", "SPHC", "STAC", "STBC", "TTLC", "TTLS", "UNLC", "UNXC",
 ]
+# BBGC (Bridge Bank Group CI) ajoute : premiere cotation le 24/09/2026.
+# SVOC retire : plus aucune cotation depuis le 10/05/2019.
 
 INDEX_TICKERS = [
     "BRVM-CB", "BRVM-CD", "BRVM-EN", "BRVM-IN", "BRVM-SF", "BRVM-SP", "BRVM-TEL",
@@ -32,6 +37,24 @@ def _parse_float(val) -> float:
         return float(str(val).replace("%", "").replace(",", ".").strip())
     except Exception:
         return 0.0
+
+
+def _parse_optional(val):
+    """Comme _parse_float, mais rend None sur un champ vide au lieu de 0.0.
+
+    La difference compte : un titre sans RSI n'est pas un titre a RSI zero.
+    BBGC, cotee depuis deux seances, n'a pas encore de RSI ; lue comme 0.0
+    elle sortait en tete des titres les plus survendus du marche.
+    """
+    if val is None:
+        return None
+    texte = str(val).replace("%", "").replace(",", ".").strip()
+    if not texte:
+        return None
+    try:
+        return float(texte)
+    except Exception:
+        return None
 
 
 @mcp.tool()
@@ -116,14 +139,35 @@ async def screen_market(
     async with httpx.AsyncClient() as client:
         results_raw = await asyncio.gather(*[fetch_one(client, t) for t in tickers])
 
+    # Sans ce garde-fou, une source injoignable renvoyait une liste vide, qui se
+    # lit comme "aucun titre ne correspond aux criteres". C'est ce qui a masque
+    # la panne de septembre 2026 pendant une semaine.
+    recuperes = sum(1 for x in results_raw if x is not None)
+    if recuperes < len(tickers) / 2:
+        raise RuntimeError(
+            "Donnees indisponibles : %d ticker(s) sur %d seulement ont repondu. "
+            "Le screener ne renvoie PAS un resultat vide, il signale la panne. "
+            "Verifier %s" % (recuperes, len(tickers), BASE_URL)
+        )
+
     results = []
     for item in results_raw:
         if item is None:
             continue
         ticker, row = item
-        rsi = _parse_float(row.get("RSI", 0))
-        var_1m = _parse_float(row.get("1_Mois_Variation", 0))
-        var_1y = _parse_float(row.get("1_An_Variation", 0))
+        rsi = _parse_optional(row.get("RSI"))
+        var_1m = _parse_optional(row.get("1_Mois_Variation"))
+        var_1y = _parse_optional(row.get("1_An_Variation"))
+
+        # Un titre dont la valeur filtree est inconnue est ecarte du resultat,
+        # jamais assimile a zero. Une nouvelle cotation n'a ni RSI ni recul sur
+        # un an : la faire passer pour survendue serait un faux signal d'achat.
+        if (rsi_max is not None or rsi_min is not None) and rsi is None:
+            continue
+        if (variation_1m_min is not None or variation_1m_max is not None) and var_1m is None:
+            continue
+        if (variation_1y_min is not None or variation_1y_max is not None) and var_1y is None:
+            continue
 
         if rsi_max is not None and rsi > rsi_max:
             continue
@@ -142,15 +186,16 @@ async def screen_market(
             "ticker": ticker,
             "cours": row.get("Cours_Actuel"),
             "variation_jour": row.get("Variation_Cours"),
-            "rsi": round(rsi, 2),
-            "beta_1an": row.get("Beta_1_An"),
-            "variation_1m": f"{var_1m:.2%}",
-            "variation_1y": f"{var_1y:.2%}",
+            "rsi": round(rsi, 2) if rsi is not None else None,
+            "beta_1an": row.get("Beta_1_An") or None,
+            "variation_1m": f"{var_1m:.2%}" if var_1m is not None else None,
+            "variation_1y": f"{var_1y:.2%}" if var_1y is not None else None,
             "volume_xof": row.get("Volume_XOF"),
             "valorisation": row.get("Valorisation"),
         })
 
-    results.sort(key=lambda x: float(x["rsi"] or 0))
+    # Les titres sans RSI ferment la liste au lieu de l'ouvrir.
+    results.sort(key=lambda x: (x["rsi"] is None, x["rsi"] or 0))
     return results
 
 
@@ -174,6 +219,15 @@ async def get_market_overview() -> dict:
         rows_raw = await asyncio.gather(*[fetch_one(client, t) for t in STOCK_TICKERS])
 
     rows = [r for r in rows_raw if r is not None]
+
+    # Meme garde-fou que screen_market : echouer bruyamment plutot que rendre
+    # un marche a zero hausse et zero baisse, qui ressemble a une seance calme.
+    if len(rows) < len(STOCK_TICKERS) / 2:
+        raise RuntimeError(
+            "Donnees indisponibles : %d ticker(s) sur %d seulement ont repondu. "
+            "L'apercu du marche ne renvoie PAS des compteurs a zero, il signale "
+            "la panne. Verifier %s" % (len(rows), len(STOCK_TICKERS), BASE_URL)
+        )
 
     hausse, baisse, stable = [], [], []
     rsi_values = []

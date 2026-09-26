@@ -1,0 +1,6 @@
+# Depots imbriques, versionnes separement
+brvm-data/
+brvm-data-public/
+
+__pycache__/
+*.pyc
