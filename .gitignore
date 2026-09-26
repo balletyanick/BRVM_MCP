@@ -1,6 +1,8 @@
 # Depots imbriques, versionnes separement
 brvm-data/
-brvm-data-public/
 
 __pycache__/
 *.pyc
+
+# Journal d execution de MANSA, regenere a chaque lancement
+mansa/server.log
